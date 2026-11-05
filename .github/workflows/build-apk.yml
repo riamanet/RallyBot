@@ -25,8 +25,28 @@ jobs:
           test -f RallyBot-project.zip
           mkdir -p rallybot-source
           unzip -q RallyBot-project.zip -d rallybot-source
-          test -f rallybot-source/settings.gradle.kts
-          test -f rallybot-source/app/build.gradle.kts
+
+      - name: 앱 문구 수정
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("rallybot-source/app/src/main/java/com/crow/rally/MainActivity.kt")
+          s = p.read_text(encoding="utf-8")
+
+          s = s.replace(
+              "도적보스 몇 레벨 이하 잡기",
+              "도적보스 레벨"
+          )
+          s = s.replace(
+              "예: 70 입력 → 도적보스 Lv.70까지 참여, 75는 제외",
+              "설정한 레벨 이하의 도적보스 집결에만 자동 참여합니다."
+          )
+
+          assert 'label("도적보스 레벨"' in s
+          assert "설정한 레벨 이하의 도적보스 집결에만 자동 참여합니다." in s
+          p.write_text(s, encoding="utf-8")
+          PY
 
       - name: Java 17 설치
         uses: actions/setup-java@v4
