@@ -15,6 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: 저장소 가져오기
         uses: actions/checkout@v4
@@ -30,17 +31,22 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           root = Path('rallybot-source/app/src/main/java/com/crow/rally')
+
           ui = root / 'MainActivity.kt'
           s = ui.read_text(encoding='utf-8')
           s = s.replace('도적보스 몇 레벨 이하 잡기', '도적보스 레벨')
-          s = s.replace('예: 70 입력 → 도적보스 Lv.70까지 참여, 75는 제외',
-                        '설정한 레벨 이하의 도적보스 집결에만 자동 참여합니다.')
+          s = s.replace(
+              '예: 70 입력 → 도적보스 Lv.70까지 참여, 75는 제외',
+              '설정한 레벨 이하의 도적보스 집결에만 자동 참여합니다.'
+          )
           assert '도적보스 레벨' in s
           ui.write_text(s, encoding='utf-8')
 
           p = root / 'RallyService.kt'
           s = p.read_text(encoding='utf-8')
+
           changes = [
               ('handler.postDelayed(::scanFrame, 1700L)', 'handler.postDelayed(::scanFrame, 450L)'),
               ('now - lastActionAt < 1100', 'now - lastActionAt < 300'),
@@ -53,23 +59,37 @@ jobs:
               ('schedule(1650)', 'schedule(280)'),
               ('schedule(2500)', 'schedule(500)'),
           ]
+
           for old, new in changes:
               assert s.count(old) == 1, f'코드 위치 확인 실패: {old}'
               s = s.replace(old, new)
+
+          # 가장 오른쪽 4번째 + 버튼만 감지
+          old_plus = 'for (x in listOf(620, 530, 440, 349)) {'
+          assert s.count(old_plus) == 1, '집결 + 버튼 탐색 코드 확인 실패'
+          s = s.replace(old_plus, 'for (x in listOf(620)) {')
+
           key = 'recognizer.process(InputImage.fromBitmap(bitmap, 0))'
-          value = ('val inputBitmap = when (stage) {\n'
-                   '            Stage.EVENT -> Bitmap.createBitmap(bitmap, 0, 0, 260, REF_H)\n'
-                   '            Stage.DEPLOY -> Bitmap.createBitmap(bitmap, 180, 1070, 360, 200)\n'
-                   '            Stage.WORLD -> bitmap\n'
-                   '        }\n'
-                   '        recognizer.process(InputImage.fromBitmap(inputBitmap, 0))')
+          value = (
+              'val inputBitmap = when (stage) {\n'
+              '            Stage.EVENT -> Bitmap.createBitmap(bitmap, 0, 0, 260, REF_H)\n'
+              '            Stage.DEPLOY -> Bitmap.createBitmap(bitmap, 180, 1070, 360, 200)\n'
+              '            Stage.WORLD -> bitmap\n'
+              '        }\n'
+              '        recognizer.process(InputImage.fromBitmap(inputBitmap, 0))'
+          )
           assert s.count(key) == 1
           s = s.replace(key, value)
-          key = ('                bitmap.recycle()\n'
-                 '                schedule(if (stage == Stage.EVENT) 1700 else 1400)')
-          value = ('                if (inputBitmap !== bitmap) inputBitmap.recycle()\n'
-                   '                bitmap.recycle()\n'
-                   '                schedule(250)')
+
+          key = (
+              '                bitmap.recycle()\n'
+              '                schedule(if (stage == Stage.EVENT) 1700 else 1400)'
+          )
+          value = (
+              '                if (inputBitmap !== bitmap) inputBitmap.recycle()\n'
+              '                bitmap.recycle()\n'
+              '                schedule(250)'
+          )
           assert s.count(key) == 1
           s = s.replace(key, value)
           p.write_text(s, encoding='utf-8')
@@ -77,9 +97,13 @@ jobs:
           p = root / 'TapService.kt'
           s = p.read_text(encoding='utf-8')
           assert s.count('StrokeDescription(path, 0, 90)') == 1
-          p.write_text(s.replace('StrokeDescription(path, 0, 90)',
-                                 'StrokeDescription(path, 0, 55)'), encoding='utf-8')
-          print('빠른 반응 모드 적용 완료')
+          s = s.replace(
+              'StrokeDescription(path, 0, 90)',
+              'StrokeDescription(path, 0, 55)'
+          )
+          p.write_text(s, encoding='utf-8')
+
+          print('빠른 반응 및 4번째 + 버튼 설정 완료')
           PY
 
       - name: Java 17 설치
