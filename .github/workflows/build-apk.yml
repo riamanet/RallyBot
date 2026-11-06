@@ -1,5 +1,5 @@
 
-name: RallyBot APK 자동 빌드
+name: RallyBot APK 자동 빌드 및 업데이트 배포
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -25,88 +25,10 @@ jobs:
           test -f RallyBot-project.zip
           mkdir -p rallybot-source
           unzip -q RallyBot-project.zip -d rallybot-source
-          test -f rallybot-source/app/src/main/java/com/crow/rally/RallyService.kt
+          test -f rallybot-source/settings.gradle.kts
+          test -f rallybot-source/app/src/main/java/com/crow/rally/RallyUpdater.kt
 
-      - name: 문구 및 빠른 반응 모드 적용
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          root = Path('rallybot-source/app/src/main/java/com/crow/rally')
-
-          ui = root / 'MainActivity.kt'
-          s = ui.read_text(encoding='utf-8')
-          s = s.replace('도적보스 몇 레벨 이하 잡기', '도적보스 레벨')
-          s = s.replace(
-              '예: 70 입력 → 도적보스 Lv.70까지 참여, 75는 제외',
-              '설정한 레벨 이하의 도적보스 집결에만 자동 참여합니다.'
-          )
-          assert '도적보스 레벨' in s
-          ui.write_text(s, encoding='utf-8')
-
-          p = root / 'RallyService.kt'
-          s = p.read_text(encoding='utf-8')
-
-          changes = [
-              ('handler.postDelayed(::scanFrame, 1700L)', 'handler.postDelayed(::scanFrame, 450L)'),
-              ('now - lastActionAt < 1100', 'now - lastActionAt < 300'),
-              ('if (now - lastActionAt < 300) { schedule(500); return }',
-               'if (now - lastActionAt < 300) { schedule(100); return }'),
-              ('if (frame == null) { schedule(500); return }',
-               'if (frame == null) { schedule(150); return }'),
-              ('schedule(1050)', 'schedule(250)'),
-              ('schedule(1000)', 'schedule(160)'),
-              ('schedule(1650)', 'schedule(280)'),
-              ('schedule(2500)', 'schedule(500)'),
-          ]
-
-          for old, new in changes:
-              assert s.count(old) == 1, f'코드 위치 확인 실패: {old}'
-              s = s.replace(old, new)
-
-          # 가장 오른쪽 4번째 + 버튼만 감지
-          old_plus = 'for (x in listOf(620, 530, 440, 349)) {'
-          assert s.count(old_plus) == 1, '집결 + 버튼 탐색 코드 확인 실패'
-          s = s.replace(old_plus, 'for (x in listOf(620)) {')
-
-          key = 'recognizer.process(InputImage.fromBitmap(bitmap, 0))'
-          value = (
-              'val inputBitmap = when (stage) {\n'
-              '            Stage.EVENT -> Bitmap.createBitmap(bitmap, 0, 0, 260, REF_H)\n'
-              '            Stage.DEPLOY -> Bitmap.createBitmap(bitmap, 180, 1070, 360, 200)\n'
-              '            Stage.WORLD -> bitmap\n'
-              '        }\n'
-              '        recognizer.process(InputImage.fromBitmap(inputBitmap, 0))'
-          )
-          assert s.count(key) == 1
-          s = s.replace(key, value)
-
-          key = (
-              '                bitmap.recycle()\n'
-              '                schedule(if (stage == Stage.EVENT) 1700 else 1400)'
-          )
-          value = (
-              '                if (inputBitmap !== bitmap) inputBitmap.recycle()\n'
-              '                bitmap.recycle()\n'
-              '                schedule(250)'
-          )
-          assert s.count(key) == 1
-          s = s.replace(key, value)
-          p.write_text(s, encoding='utf-8')
-
-          p = root / 'TapService.kt'
-          s = p.read_text(encoding='utf-8')
-          assert s.count('StrokeDescription(path, 0, 90)') == 1
-          s = s.replace(
-              'StrokeDescription(path, 0, 90)',
-              'StrokeDescription(path, 0, 55)'
-          )
-          p.write_text(s, encoding='utf-8')
-
-          print('빠른 반응 및 4번째 + 버튼 설정 완료')
-          PY
-
-      - name: Java 17 설치
+      - name: Java 17 설정
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -117,13 +39,44 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: APK 빌드
-        working-directory: rallybot-source
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: 고정 서명 키 준비
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RALLYBOT_KEYSTORE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.RALLYBOT_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo 'RALLYBOT_KEYSTORE_BASE64 secret missing'; exit 1; }
+          test -n "$SIGNING_PASSWORD" || { echo 'RALLYBOT_KEYSTORE_PASSWORD secret missing'; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > rallybot-source/signing.p12
+          chmod 600 rallybot-source/signing.p12
 
-      - name: APK 저장
+      - name: 서명된 APK 빌드
+        working-directory: rallybot-source
+        env:
+          RALLYBOT_KEYSTORE_PATH: ${{ github.workspace }}/rallybot-source/signing.p12
+          RALLYBOT_SIGNING_PASSWORD: ${{ secrets.RALLYBOT_KEYSTORE_PASSWORD }}
+        run: |
+          VERSION_CODE=$(( 10000 + GITHUB_RUN_NUMBER ))
+          gradle :app:assembleRelease --no-daemon --stacktrace \
+            -PciVersionCode="$VERSION_CODE" \
+            -PciVersionName="1.0.${GITHUB_RUN_NUMBER}"
+
+      - name: 앱 배포 파일 준비
+        run: |
+          cp rallybot-source/app/build/outputs/apk/release/app-release.apk RallyBot.apk
+          sha256sum RallyBot.apk > RallyBot.apk.sha256
+
+      - name: GitHub Releases에 APK 게시
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v1.0.${GITHUB_RUN_NUMBER}" \
+            RallyBot.apk RallyBot.apk.sha256 \
+            --title "RallyBot 1.0.${GITHUB_RUN_NUMBER}" \
+            --notes "도적보스 자동 집결 앱 업데이트. 설치 전 Android 시스템 확인이 필요합니다."
+
+      - name: APK 빌드 결과 저장
         uses: actions/upload-artifact@v4
         with:
           name: RallyBot-APK
-          path: rallybot-source/app/build/outputs/apk/debug/*.apk
+          path: RallyBot.apk
           if-no-files-found: error
